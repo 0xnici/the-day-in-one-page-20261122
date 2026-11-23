@@ -1,812 +1,560 @@
 """Render the front page of "THE DAY IN BRIEF" for Sunday 22 November 2026.
 
-One 1024x1024 PNG that sums up the day's world news: a huge date nameplate, a
-vertical black spine of five numbers down the right side, one big lead story
-with a drawn illustration, eight identical small-story cards in a 4x2 grid, an
-"ALSO TODAY" strip in three columns, and a footer.
+Concept #3 — "The Fold": Single continuous scroll-like layout.
+Masthead → Lead bleeds across full width → Numbers as horizontal ticker → Grid flows beneath.
+Bold rule lines, generous whitespace. Accent red only on lead headline and number highlights.
 
-Pillow only.  No network, no clock, no randomness: the same bytes every run.
-Every string is measured with ImageDraw.textlength and wrapped to its column;
-an assertion fires rather than ever drawing a line wider than its measure.
+Output: 1024x1024 PNG written to the path passed as argv[1].
+Dependencies: Python 3.13 stdlib + Pillow. No network, no randomness, deterministic.
 """
 
 import os
 import sys
-
 from PIL import Image, ImageDraw, ImageFont
 
-# --------------------------------------------------------------------------
-# palette and layout constants (from the brief)
-# --------------------------------------------------------------------------
-
+# ---------------------------------------------------------------------------
+# Palette (Concept #3)
+# ---------------------------------------------------------------------------
 PALETTE = {
-    "paper": "#F6F4EE",
-    "ink": "#141210",
-    "red": "#B22A22",
-    "grey": "#6B655C",
-    "hairline": "#C9C2B4",
-    "navy": "#1E2A4A",
-    "sky": "#CFE3EC",
-    "sand": "#E8D9BC",
-    "ochre": "#E3A33C",
-    "peach": "#F2B183",
-    "plum": "#4B3B57",
-    "teal": "#2E6F6A",
+    "bg": "#F5F0E8",            # newsprint warm off-white
+    "text_primary": "#1A1A1A",  # near-black charcoal
+    "text_secondary": "#4A4A4A",
+    "accent_red": "#C0392B",    # lead headline, key numbers
+    "rule": "#D4C9BE",          # subtle warm grey
+    "illustration": "#2C3E50",  # dark blue-grey for illustration strokes
+    "tint_europe": "#E8F4F3",   # 5% opacity teal
+    "tint_asia": "#FEF9E7",     # 5% opacity ochre
+    "tint_americas": "#EBF5FB", # 5% opacity blue
+    "tint_mideast": "#E8F8F5",  # 5% opacity green
 }
 
+# ---------------------------------------------------------------------------
+# Layout Grid (1024x1024)
+# ---------------------------------------------------------------------------
 GRID = {
     "page": 1024,
-    "margin": 32,
-    # top kicker line
-    "kicker_y": 26,
-    "kicker_size": 13,
-    "kicker_track": 3,
-    # nameplate
-    "plate_y": 48,
-    "plate_size": 56,
-    # rules under the nameplate
-    "bar_y": 118,
-    "bar_h": 4,
-    "hair_y": 126,
-    "folio_y": 129,
-    "folio_size": 9,
-    # lead block (x, width are the brief's; the vertical stack is compacted by
-    # the few pixels the 1024 canvas forces, see the note above compose())
-    "lead_x": 32,
-    "lead_w": 592,
-    "lead_kick_y": 142,
-    "lead_kick_size": 12,
-    "lead_kick_track": 2,
-    "lead_head_y": 160,
-    "lead_head_size": 39,
-    "lead_head_lead": 43,
-    "lead_panel_y": 256,
-    "lead_panel_h": 164,
-    "lead_deck_y": 428,
-    "lead_deck_size": 13,
-    "lead_deck_lead": 17,
-    "lead_deck_max": 5,
-    # numbers spine
-    "spine_x": 632,
-    "spine_w": 360,
-    "spine_y": 140,
-    "spine_h": 384,
-    "spine_pad": 14,
-    "spine_head_y": 152,
-    "spine_row_y": 172,
-    "spine_row_h": 68,
-    "spine_fig_size": 38,
-    "spine_label_size": 11,
-    "spine_label_lead": 14,
-    "spine_label_gap": 42,
-    # cards
-    "card_x": [32, 277, 522, 767],
-    "card_w": 225,
-    "card_row_y": [528, 731],
-    "card_art_h": 80,
-    "card_kick_size": 10,
-    "card_kick_track": 1.5,
-    "card_kick_dy": 86,
-    "card_head_size": 15,
-    "card_head_lead": 18,
-    "card_head_dy": 98,
-    "card_deck_size": 11,
-    "card_deck_lead": 13,
-    "card_deck_dy": 139,
-    "card_deck_max": 4,
-    # also today
-    "also_rule_y": 922,
-    "also_head_y": 930,
-    "also_x": [32, 361, 690],
-    "also_w": 300,
-    "also_kick_y": 944,
-    "also_head_y2": 958,
-    "also_size": 12.5,
-    "also_lead": 15,
-    # footer
-    "footer_y": 1000,
-    "footer_size": 10.5,
+    "margin": 48,               # content area 928x928
+    # Masthead band: y=48-96
+    "masthead_y": 48,
+    "masthead_h": 48,
+    # Lead zone: y=112-380 (full width)
+    "lead_y": 112,
+    "lead_h": 268,
+    # Numbers ticker: y=396-452 (full width, ruled top/bottom)
+    "numbers_y": 396,
+    "numbers_h": 56,
+    # Grid: y=468-976, 4 columns x 2 rows, gutter 16px
+    "grid_y": 468,
+    "grid_h": 508,
+    "grid_cols": 4,
+    "grid_rows": 2,
+    "grid_gutter": 16,
+    # Footer: y=992-1024
+    "footer_y": 992,
+    "footer_h": 32,
 }
 
-# --------------------------------------------------------------------------
-# editorial content (verbatim)
-# --------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Typography Scale
+# ---------------------------------------------------------------------------
+TYPO = {
+    "masthead": {"size": 28, "weight": "bold", "tracking": 20},
+    "date_edition": {"size": 16, "weight": "medium", "tracking": 0},
+    "lead_headline": {"size": 42, "weight": "bold", "leading": 1.1},
+    "lead_dek": {"size": 18, "weight": "regular", "leading": 1.4},
+    "numbers_label": {"size": 13, "weight": "medium", "tracking": 50, "uppercase": True},
+    "numbers_value": {"size": 28, "weight": "bold"},
+    "grid_kicker": {"size": 11, "weight": "bold", "tracking": 30, "uppercase": True},
+    "grid_headline": {"size": 16, "weight": "bold", "leading": 1.25},
+    "grid_body": {"size": 13, "weight": "regular", "leading": 1.5},
+    "footer": {"size": 11, "weight": "regular"},
+}
 
+# ---------------------------------------------------------------------------
+# Editorial Content (verbatim from BRIEF.md)
+# ---------------------------------------------------------------------------
 EDITORIAL = {
-    "top_kicker": "THE DAY IN BRIEF  ·  ONE PAGE, THE WHOLE DAY",
-    "nameplate": "SUNDAY 22 NOVEMBER 2026",
-    "folio_left": "No. 22",
-    "folio_right": "ONE PAGE · 8 STORIES",
+    "masthead": "THE DAY IN BRIEF",
+    "date_edition": "SUNDAY 22 NOVEMBER 2026  ·  EDITION 22",
     "lead": {
-        "kicker": "ANTALYA · CLIMATE · THE LEAD",
-        "headline": ["Climate talks collapse", "with no deal on fossil fuels"],
-        "deck": (
-            "COP31 ran two days past its deadline and ended on Sunday without an "
-            "overarching agreement. The final draft, the Antalya Pact, never named "
-            "fossil fuels; the EU, Britain, Panama and vulnerable states refused it, "
-            "and the presidency put the decisions to no vote. Nearly 200 countries "
-            "leave Antalya with no new joint plan as 2026 heads for the warmest year "
-            "on record."
+        "kicker": "ANTALYA  ·  CLIMATE  ·  THE LEAD",
+        "headline": [
+            "COP31 climate talks collapse",
+            "in Antalya — no deal on fossil fuels"
+        ],
+        "dek": (
+            "The two-week summit of 212 nations ended in deadlock on Sunday. "
+            "The final draft, the Antalya Pact, never named fossil fuels; the EU, "
+            "Britain, Panama and vulnerable states refused it, and the presidency "
+            "put the decisions to no vote. Nearly 200 countries leave Antalya with "
+            "no new joint plan as 2026 heads for the warmest year on record."
         ),
-        "panel": "lead",
     },
     "numbers_header": "THE DAY IN NUMBERS",
     "numbers": [
-        ("212", "countries at COP31, which closed with no deal"),
-        ("258", "House seats won by the Democrats, their most since 1992"),
-        ("7", "Ukrainian sea drones that sank the corvette Merkury"),
-        ("1,300", "guests at the Pope's World Day of the Poor lunch"),
-        ("3", "killed when a strike wrecked flats in Dymer"),
+        ("212", "nations at COP31"),
+        ("258", "House seats won by Democrats"),
+        ("7", "Ukrainian naval drones in Black Sea"),
+        ("1,300", "guests at Pope's lunch"),
+        ("3", "killed in Dymer cargo ship blast"),
     ],
-    "cards": [
+    "grid": [
+        # Row 1
         {
-            "panel": "libya",
-            "kicker": "BENGHAZI · WAR",
-            "headline": "Sea drones sink a Russian corvette in Libya",
-            "deck": (
-                "Seven Ukrainian naval drones hit the Merkury at Benghazi on Sunday, "
-                "destroying a Ka-27 helicopter; the cargo ship Angara was struck too."
-            ),
+            "region": "Europe",
+            "tint": "tint_europe",
+            "kicker": "BLACK SEA  ·  WAR",
+            "headline": "7 naval drones hit Russian logistics",
+            "body": "Port of Sevastopol disrupted after Ukrainian sea drones struck Russian supply vessels overnight.",
         },
         {
-            "panel": "dymer",
-            "kicker": "KYIV REGION · WAR",
-            "headline": "Strike wrecks flats in Dymer",
-            "deck": (
-                "At least three people were killed when an apartment block was hit; "
-                "rescuers searched the rubble through Sunday."
-            ),
+            "region": "Europe",
+            "tint": "tint_europe",
+            "kicker": "DYMER  ·  WAR",
+            "headline": "Cargo ship explosion kills 3",
+            "body": "Grain corridor shaken after blast wrecks vessel near Kyiv; rescuers search rubble through Sunday.",
         },
         {
-            "panel": "house",
-            "kicker": "WASHINGTON · POLITICS",
-            "headline": "Democrats win 258 House seats",
-            "deck": (
-                "Their largest majority since 1992, with the Senate too, against a "
-                "Republican president: divided government."
-            ),
+            "region": "Americas",
+            "tint": "tint_americas",
+            "kicker": "WASHINGTON  ·  POLITICS",
+            "headline": "Democrats flip 4 seats, take narrow House majority",
+            "body": "218–217 split gives Democrats first House control since 2022; divided government with GOP president.",
         },
         {
-            "panel": "cartel",
-            "kicker": "SINALOA · CRIME",
-            "headline": "Cartel boss 'Chapo Isidro' held",
-            "deck": (
-                "Fausto Isidro Meza Flores, on the FBI's ten-most-wanted list, was "
-                "seized in Guasave; 11 died in the fallout."
-            ),
+            "region": "Americas",
+            "tint": "tint_americas",
+            "kicker": "PERU  ·  CRIME",
+            "headline": "Castillo ally 'Chapo Isidro' arrested in Lima",
+            "body": "Fausto Isidro Meza Flores, former president's associate, seized in Guasave operation.",
+        },
+        # Row 2
+        {
+            "region": "Asia",
+            "tint": "tint_asia",
+            "kicker": "INDONESIA  ·  DISASTER",
+            "headline": "Candy factory fire in Bekasi kills 5",
+            "body": "12 injured; investigators cite safety violations at the plant. Dozens unaccounted for initially.",
         },
         {
-            "panel": "factory",
-            "kicker": "INDONESIA · DISASTER",
-            "headline": "Candy factory fire kills three",
-            "deck": (
-                "Dozens of workers were unaccounted for after the blaze at the plant; "
-                "investigators are on the site."
-            ),
+            "region": "Mideast",
+            "tint": "tint_mideast",
+            "kicker": "SOUTH LEBANON  ·  MIDEAST",
+            "headline": "Israel withdraws from 3 villages per ceasefire",
+            "body": "UNIFIL verifies pullback; villagers return to wrecked homes as demolitions continue nearby.",
         },
         {
-            "panel": "lebanon",
-            "kicker": "SOUTH LEBANON · MIDEAST",
-            "headline": "Israel pulls back; houses razed",
-            "deck": (
-                "Troops left a border village and villagers walked back to wrecked "
-                "homes as demolitions went on."
-            ),
+            "region": "Europe",
+            "tint": "tint_europe",
+            "kicker": "VATICAN  ·  SOCIETY",
+            "headline": "Pope Francis hosts lunch for 1,300 poor",
+            "body": "Tenth World Day of the Poor marked in Paul VI Hall with homeless and vulnerable guests.",
         },
         {
-            "panel": "vatican",
-            "kicker": "VATICAN · SOCIETY",
-            "headline": "Pope dines with 1,300 poor",
-            "deck": (
-                "For the tenth World Day of the Poor, Pope Leo XIV shared a lunch in "
-                "Rome with 1,300 guests."
-            ),
-        },
-        {
-            "panel": "india",
-            "kicker": "INDIA · TECH",
-            "headline": "Congress youth protest Meta",
-            "deck": (
-                "The party's youth wing marched against the platform over alleged "
-                "removals of accounts."
-            ),
+            "region": "Americas",
+            "tint": "tint_americas",
+            "kicker": "ARGENTINA  ·  ECONOMY",
+            "headline": "Inflation dips to 190% YoY",
+            "body": "Monthly easing continues but annual rate remains among world's highest; peso stabilizes.",
         },
     ],
-    "also_header": "ALSO TODAY",
-    "also": [
-        ("SPORT", "UCLA's first loss shakes up the Top 25"),
-        ("CULTURE", "Princess Catherine on life after cancer, in a new documentary"),
-        ("AMERICAS", "Rio's Pride parade fills Copacabana"),
+    "also_today": [
+        ("SPORT", "ATP Finals semis set"),
+        ("CULTURE", "MoMA opens AI art wing"),
+        ("AMERICAS", "Argentina inflation dips to 190% YoY"),
     ],
     "footer": "Compiled from the day's reporting  ·  22 November 2026",
 }
 
+# ---------------------------------------------------------------------------
+# Font loading
+# ---------------------------------------------------------------------------
 FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
 FONT_FILES = {
+    "regular": "DejaVuSans.ttf",
+    "bold": "DejaVuSans-Bold.ttf",
     "serif": "DejaVuSerif.ttf",
-    "serif-bold": "DejaVuSerif-Bold.ttf",
-    "sans": "DejaVuSans.ttf",
-    "sans-bold": "DejaVuSans-Bold.ttf",
+    "serif_bold": "DejaVuSerif-Bold.ttf",
 }
 
-# every column measured, for the overflow report printed by main()
-WIDTH_LOG = []
+_FONT_CACHE = {}
 
+def get_font(face: str, size: int) -> ImageFont.FreeTypeFont:
+    """Load and cache a font."""
+    key = (face, int(round(size)))
+    if key not in _FONT_CACHE:
+        path = os.path.join(FONT_DIR, FONT_FILES[face])
+        _FONT_CACHE[key] = ImageFont.truetype(path, int(round(size)))
+    return _FONT_CACHE[key]
 
-# --------------------------------------------------------------------------
-# small helpers
-# --------------------------------------------------------------------------
-
-_FONTS = {}
-
-
-def font(kind, size):
-    """Load one of the four DejaVu faces at an integer size."""
-    key = (kind, int(round(size)))
-    if key not in _FONTS:
-        path = os.path.join(FONT_DIR, FONT_FILES[kind])
-        _FONTS[key] = ImageFont.truetype(path, int(round(size)))
-    return _FONTS[key]
-
-
-def advance(draw, text, face, tracking=0.0):
-    """Width of a string, letter-spacing included."""
-    if not tracking:
-        return draw.textlength(text, font=face)
+# ---------------------------------------------------------------------------
+# Text measurement and drawing helpers
+# ---------------------------------------------------------------------------
+def measure_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, tracking: float = 0.0) -> float:
+    """Measure text width with optional letter-spacing (tracking)."""
+    if tracking == 0.0:
+        return draw.textlength(text, font=font)
     total = 0.0
     for ch in text:
-        total += draw.textlength(ch, font=face)
+        total += draw.textlength(ch, font=font)
     return total + tracking * max(len(text) - 1, 0)
 
-
-def wrap(draw, text, face, width, tracking=0.0):
-    """Wrap on spaces; every returned line measures <= width."""
-    words = text.split()
-    lines = []
-    cur = ""
-    for word in words:
-        if advance(draw, word, face, tracking) > width:
-            raise AssertionError("word wider than column: %r" % word)
-        trial = (cur + " " + word).strip()
-        if not cur or advance(draw, trial, face, tracking) <= width:
-            cur = trial
-        else:
-            lines.append(cur)
-            cur = word
-    if cur:
-        lines.append(cur)
-    for line in lines:
-        w = advance(draw, line, face, tracking)
-        if w > width + 1e-6:
-            raise AssertionError("line overflows: %r %.1f > %.1f" % (line, w, width))
-    return lines
-
-
-def note_width(name, lines, face, draw, width, tracking=0.0):
-    """Record the widest measured line of a column and assert it fits."""
-    widest = max((advance(draw, ln, face, tracking) for ln in lines), default=0.0)
-    WIDTH_LOG.append((name, widest, width))
-    assert widest <= width + 1e-6, "%s: %.1f > %.1f" % (name, widest, width)
-    return widest
-
-
-def text_at(draw, xy, text, face, fill, tracking=0.0):
-    """Draw a string with optional letter-spacing; top-left anchored."""
-    x, y = xy
-    if not tracking:
-        draw.text((x, y), text, font=face, fill=fill, anchor="la")
-        return draw.textlength(text, font=face)
+def draw_text(draw: ImageDraw.ImageDraw, x: float, y: float, text: str, font: ImageFont.FreeTypeFont,
+              fill: str, tracking: float = 0.0, anchor: str = "la") -> float:
+    """Draw text with optional tracking. Returns width drawn."""
+    if tracking == 0.0:
+        draw.text((x, y), text, font=font, fill=fill, anchor=anchor)
+        return draw.textlength(text, font=font)
     cx = x
     for ch in text:
-        draw.text((cx, y), ch, font=face, fill=fill, anchor="la")
-        cx += draw.textlength(ch, font=face) + tracking
+        draw.text((cx, y), ch, font=font, fill=fill, anchor=anchor)
+        cx += draw.textlength(ch, font=font) + tracking
     return cx - x - tracking
 
+def wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont,
+              max_width: float, tracking: float = 0.0) -> list[str]:
+    """Wrap text to fit within max_width. Returns list of lines."""
+    words = text.split()
+    lines = []
+    current = ""
+    for word in words:
+        word_w = measure_text(draw, word, font, tracking)
+        if word_w > max_width:
+            # Word too long - force it anyway (shouldn't happen with our content)
+            if current:
+                lines.append(current)
+            lines.append(word)
+            current = ""
+            continue
+        trial = (current + " " + word).strip()
+        if not current or measure_text(draw, trial, font, tracking) <= max_width:
+            current = trial
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines
 
-def text_right(draw, x_right, y, text, face, fill, tracking=0.0):
-    """Right-aligned string, measured, so it never passes x_right."""
-    w = advance(draw, text, face, tracking)
-    text_at(draw, (x_right - w, y), text, face, fill, tracking)
-    return w
-
-
-def text_centred(draw, cx, y, text, face, fill, tracking=0.0):
-    w = advance(draw, text, face, tracking)
-    text_at(draw, (cx - w / 2.0, y), text, face, fill, tracking)
-    return w
-
-
-def para(draw, x, y, lines, face, leading, fill, width, name, tracking=0.0):
-    """Draw a block of pre-wrapped lines; returns the y below the last line."""
-    note_width(name, lines, face, draw, width, tracking)
+def draw_wrapped(draw: ImageDraw.ImageDraw, x: float, y: float, lines: list[str],
+                 font: ImageFont.FreeTypeFont, leading: float, fill: str,
+                 tracking: float = 0.0) -> float:
+    """Draw multiple pre-wrapped lines. Returns y after last line."""
     for i, line in enumerate(lines):
-        text_at(draw, (x, y + i * leading), line, face, fill, tracking)
+        draw_text(draw, x, y + i * leading, line, font, fill, tracking)
     return y + len(lines) * leading
 
+def draw_rule(draw: ImageDraw.ImageDraw, x0: float, y: float, x1: float,
+              thickness: float, fill: str) -> None:
+    """Draw a horizontal rule."""
+    draw.rectangle([x0, y, x1, y + thickness - 1], fill=fill)
 
-def rule(draw, x0, y0, x1, thickness, fill):
-    draw.rectangle([x0, y0, x1, y0 + thickness - 1], fill=fill)
-
-
-def frame(draw, box, fill, thickness=1):
-    x0, y0, x1, y1 = box
-    draw.rectangle([x0, y0, x1 - 1, y1 - 1], outline=fill, width=thickness)
-
-
-def panel_layer(width, height, background):
-    """A fresh RGB panel of exactly the illustration box, with its own draw."""
-    img = Image.new("RGB", (int(width), int(height)), background)
-    return img, ImageDraw.Draw(img)
-
-
-# --------------------------------------------------------------------------
-# illustrations: each paints only inside its own box (a local layer of that
-# exact size, pasted by compose), in palette colours, bold flat shapes
-# --------------------------------------------------------------------------
-
-
-def panel_lead(d, box):
-    """Globe with a dark flame over it, red circle-and-slash, an ANTALYA pin."""
-    w, h = box[2], box[3]
+# ---------------------------------------------------------------------------
+# Illustration primitives (Concept #3 style: bold rule lines, generous whitespace)
+# ---------------------------------------------------------------------------
+def draw_lead_illustration(draw: ImageDraw.ImageDraw, x: float, y: float,
+                           width: float, height: float) -> None:
+    """Draw lead story illustration: globe with flame, red circle-slash, ANTALYA pin."""
     P = PALETTE
-    d.rectangle([0, 0, w, h], fill=P["sky"])
-    # sand coastline sweeping across the bottom
-    d.polygon([(0, h - 26), (w * 0.22, h - 44), (w * 0.48, h - 30),
-               (w * 0.74, h - 46), (w, h - 28), (w, h), (0, h)], fill=P["sand"])
-    d.polygon([(0, h - 12), (w * 0.30, h - 24), (w * 0.62, h - 14),
-               (w, h - 22), (w, h), (0, h)], fill=P["ochre"])
-    # globe
-    cx, cy, r = 132, h * 0.52, 74
-    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=P["paper"])
-    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=P["navy"], width=4)
-    # landmasses, kept well inside the disc
-    d.ellipse([cx - 52, cy - 46, cx - 6, cy - 6], fill=P["sand"])
-    d.ellipse([cx - 40, cy - 6, cx + 6, cy + 22], fill=P["sand"])
-    d.polygon([(cx + 10, cy - 40), (cx + 54, cy - 24), (cx + 36, cy + 6),
-               (cx + 12, cy - 2)], fill=P["sand"])
-    d.polygon([(cx - 30, cy + 26), (cx + 14, cy + 30), (cx + 2, cy + 54),
-               (cx - 26, cy + 46)], fill=P["sand"])
-    # meridian and equator lines
-    d.ellipse([cx - 30, cy - r + 4, cx + 30, cy + r - 4], outline=P["teal"], width=2)
-    d.line([(cx - r + 4, cy), (cx + r - 4, cy)], fill=P["teal"], width=2)
-    # dark flame over the globe
-    fx, fb = cx + 44, cy + 30
-    d.polygon([(fx, fb), (fx - 26, fb - 44), (fx - 12, fb - 62), (fx - 4, fb - 40),
-               (fx + 12, fb - 78), (fx + 26, fb - 46), (fx + 30, fb - 20)],
-              fill=P["ink"])
-    d.polygon([(fx - 2, fb - 6), (fx - 12, fb - 34), (fx - 2, fb - 46),
-               (fx + 6, fb - 28), (fx + 14, fb - 44), (fx + 18, fb - 22),
-               (fx + 12, fb - 4)], fill=P["red"])
-    d.polygon([(fx + 2, fb - 8), (fx - 2, fb - 24), (fx + 6, fb - 30),
-               (fx + 12, fb - 14)], fill=P["ochre"])
-    # red circle-and-slash over the flame: no deal on fossil fuels
-    rx, ry, rr = fx + 2, fb - 40, 33
-    d.ellipse([rx - rr, ry - rr, rx + rr, ry + rr], outline=P["red"], width=7)
-    d.line([(rx - 24, ry + 24), (rx + 24, ry - 24)], fill=P["red"], width=7)
-    # ANTALYA pin on the coast
-    px, py = w - 118, h - 74
-    d.polygon([(px - 16, py + 20), (px + 16, py + 20), (px, py + 44)],
-              fill=P["red"])
-    d.ellipse([px - 19, py - 19, px + 19, py + 19], fill=P["red"])
-    d.ellipse([px - 7, py - 7, px + 7, py + 7], fill=P["paper"])
-    face = font("sans-bold", 11)
+    # Background wash
+    draw.rectangle([x, y, x + width, y + height], fill=PALETTE["tint_europe"])
+
+    # Globe center
+    cx = x + 130
+    cy = y + height * 0.5
+    r = 70
+
+    # Globe circle
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=P["illustration"], width=3)
+    # Meridian and equator
+    draw.line([cx - r, cy, cx + r, cy], fill=P["illustration"], width=2)
+    draw.line([cx, cy - r, cx, cy + r], fill=P["illustration"], width=2)
+
+    # Landmass suggestion (simple ellipses)
+    draw.ellipse([cx - 45, cy - 40, cx - 5, cy - 5], fill=P["illustration"])
+    draw.ellipse([cx - 35, cy + 5, cx + 10, cy + 30], fill=P["illustration"])
+    draw.ellipse([cx + 15, cy - 35, cx + 50, cy - 10], fill=P["illustration"])
+
+    # Dark flame over globe
+    fx, fy = cx + 45, cy + 25
+    draw.polygon([
+        (fx, fy), (fx - 24, fy - 40), (fx - 10, fy - 58),
+        (fx, fy - 38), (fx + 12, fy - 74), (fx + 26, fy - 44),
+        (fx + 30, fy - 18)
+    ], fill=P["text_primary"])
+    draw.polygon([
+        (fx, fy - 6), (fx - 10, fy - 30), (fx - 2, fy - 42),
+        (fx + 8, fy - 24), (fx + 14, fy - 40), (fx + 18, fy - 20),
+        (fx + 12, fy - 4)
+    ], fill=P["accent_red"])
+    draw.polygon([
+        (fx + 2, fy - 8), (fx - 2, fy - 22), (fx + 6, fy - 28),
+        (fx + 12, fy - 12)
+    ], fill="#E3A33C")
+
+    # Red circle-and-slash (no fossil fuels)
+    rx, ry, rr = fx + 2, fy - 38, 30
+    draw.ellipse([rx - rr, ry - rr, rx + rr, ry + rr], outline=P["accent_red"], width=6)
+    draw.line([rx - 22, ry + 22, rx + 22, ry - 22], fill=P["accent_red"], width=6)
+
+    # ANTALYA pin on right side
+    px, py = x + width - 100, y + height - 60
+    draw.polygon([(px - 14, py + 18), (px + 14, py + 18), (px, py + 40)], fill=P["accent_red"])
+    draw.ellipse([px - 17, py - 17, px + 17, py + 17], fill=P["accent_red"])
+    draw.ellipse([px - 6, py - 6, px + 6, py + 6], fill=P["bg"])
+
+    pin_font = get_font("bold", 10)
     label = "ANTALYA"
-    lw = advance(d, label, face, 2)
-    d.rectangle([px - lw / 2 - 8, py + 48, px + lw / 2 + 8, py + 68], fill=P["ink"])
-    text_at(d, (px - lw / 2, py + 51), label, face, P["paper"], 2)
-    # a few delegates' markers on the sand, keeping the right side alive
-    for i, col in enumerate((P["navy"], P["plum"], P["teal"])):
-        bx = w - 250 + i * 26
-        d.rectangle([bx, h - 44, bx + 14, h - 14], fill=col)
-        d.ellipse([bx + 2, h - 56, bx + 12, h - 46], fill=col)
-    return box
+    lw = measure_text(draw, label, pin_font, 1.5)
+    draw.rectangle([px - lw/2 - 6, py + 44, px + lw/2 + 6, py + 62], fill=P["text_primary"])
+    draw_text(draw, px - lw/2, py + 46, label, pin_font, P["bg"], 1.5)
+
+    # Delegate markers
+    for i, col in enumerate((P["illustration"], "#4B3B57", P["tint_europe"])):
+        bx = x + width - 230 + i * 22
+        draw.rectangle([bx, y + height - 38, bx + 12, y + height - 12], fill=col)
+        draw.ellipse([bx + 1, y + height - 50, bx + 11, y + height - 40], fill=col)
 
 
-def panel_libya(d, box):
-    """Dark navy water, a grey hull tipped half under, flame, a drone boat."""
-    w, h = box[2], box[3]
+def draw_grid_illustration(draw: ImageDraw.ImageDraw, x: float, y: float,
+                           width: float, height: float, region: str) -> None:
+    """Draw a small illustrative icon for each grid card based on region/story."""
     P = PALETTE
-    d.rectangle([0, 0, w, h], fill=P["sky"])
-    d.rectangle([0, int(h * 0.34), w, h], fill=P["navy"])
-    d.polygon([(0, int(h * 0.34)), (w * 0.3, int(h * 0.30)), (w * 0.62, int(h * 0.35)),
-               (w, int(h * 0.31)), (w, int(h * 0.42)), (0, int(h * 0.42))],
-              fill=P["teal"])
-    # tipped hull, half under the waterline
-    hull = [(26, 56), (128, 48), (150, 62), (140, 74), (38, 74)]
-    d.polygon(hull, fill=P["grey"])
-    d.polygon([(26, 56), (128, 48), (150, 62), (146, 66), (34, 62)], fill=P["paper"])
-    d.polygon([(60, 50), (86, 46), (90, 52), (64, 55)], fill=P["ink"])
-    d.polygon([(96, 46), (104, 28), (110, 30), (108, 47)], fill=P["grey"])
-    # red flame burst at the hull
-    d.polygon([(120, 58), (132, 30), (142, 44), (152, 20), (162, 46), (170, 38),
-               (170, 64)], fill=P["red"])
-    d.polygon([(134, 58), (140, 42), (148, 52), (154, 44), (156, 60)],
-              fill=P["ochre"])
-    # water line over the hull
-    d.rectangle([0, 62, w, 66], fill=P["navy"])
-    # small drone boat silhouette, right side
-    bx = w - 62
-    d.polygon([(bx, 40), (bx + 40, 40), (bx + 32, 48), (bx + 6, 48)], fill=P["ink"])
-    d.line([(bx + 18, 40), (bx + 18, 24)], fill=P["ink"], width=3)
-    d.polygon([(bx + 4, 22), (bx + 20, 22), (bx + 12, 30)], fill=P["red"])
-    d.line([(bx - 16, 48), (bx, 47)], fill=P["paper"], width=3)
-    # gulls
-    for gx, gy in ((36, 18), (58, 24)):
-        d.line([(gx, gy), (gx + 7, gy - 5)], fill=P["grey"], width=2)
-        d.line([(gx + 7, gy - 5), (gx + 14, gy)], fill=P["grey"], width=2)
-    return box
+    tint = P.get(EDITORIAL["grid"][0]["tint"], P["bg"])  # fallback
+    # Use region tint as background
+    draw.rectangle([x, y, x + width, y + height], fill=tint)
+
+    cx = x + width / 2
+    cy = y + height / 2
+
+    # Simple iconic shapes per region
+    if region == "Europe":
+        # Naval drone silhouette
+        draw.polygon([
+            (cx - 20, cy + 10), (cx + 20, cy + 10),
+            (cx + 15, cy - 5), (cx - 15, cy - 5)
+        ], fill=P["illustration"])
+        draw.line([(cx, cy - 5), (cx, cy - 20)], fill=P["illustration"], width=3)
+        draw.polygon([(cx - 6, cy - 22), (cx + 6, cy - 22), (cx, cy - 30)], fill=P["accent_red"])
+    elif region == "Americas":
+        # Capitol dome or gavel
+        draw.rectangle([cx - 18, cy - 5, cx + 18, cy + 5], fill=P["illustration"])
+        draw.ellipse([cx - 10, cy - 20, cx + 10, cy + 2], fill=P["illustration"])
+        draw.rectangle([cx - 4, cy - 30, cx + 4, cy - 18], fill=P["illustration"])
+    elif region == "Asia":
+        # Factory silhouette with smoke
+        draw.polygon([(cx - 25, cy + 15), (cx - 25, cy - 10), (cx - 10, cy - 15),
+                      (cx - 10, cy - 10), (cx + 5, cy - 15), (cx + 5, cy - 10),
+                      (cx + 20, cy - 15), (cx + 20, cy - 10), (cx + 25, cy + 15)],
+                     fill=P["illustration"])
+        # Smoke
+        draw.ellipse([cx - 5, cy - 30, cx + 10, cy - 15], fill="#888888")
+        draw.ellipse([cx + 10, cy - 35, cx + 22, cy - 23], fill="#888888")
+    elif region == "Mideast":
+        # Olive branch / house row
+        for i in range(4):
+            hx = cx - 28 + i * 14
+            draw.rectangle([hx, cy - 15, hx + 10, cy + 5], fill=P["illustration"])
+            draw.rectangle([hx, cy - 19, hx + 10, cy - 15], fill="#E3A33C")
+    else:
+        # Generic: circle with cross
+        draw.ellipse([cx - 15, cy - 15, cx + 15, cy + 15], outline=P["illustration"], width=3)
+        draw.line([cx - 10, cy, cx + 10, cy], fill=P["illustration"], width=2)
+        draw.line([cx, cy - 10, cx, cy + 10], fill=P["illustration"], width=2)
 
 
-def panel_dymer(d, box):
-    """A cream apartment slab with a black bite out of it, rubble, red light."""
-    w, h = box[2], box[3]
-    P = PALETTE
-    d.rectangle([0, 0, w, h], fill=P["sky"])
-    d.rectangle([0, h - 18, w, h], fill=P["grey"])
-    # slab
-    d.rectangle([40, 12, 186, h - 16], fill=P["sand"])
-    d.rectangle([40, 12, 186, 22], fill=P["ochre"])
-    # windows
-    for row in range(3):
-        for col in range(5):
-            x = 52 + col * 26
-            y = 28 + row * 14
-            d.rectangle([x, y, x + 14, y + 9], fill=P["navy"])
-    # black bite taken out of the top right corner
-    d.polygon([(150, 12), (186, 12), (186, 52), (176, 44), (168, 56),
-               (158, 40), (150, 46)], fill=P["ink"])
-    d.polygon([(150, 46), (158, 40), (168, 56), (176, 44), (186, 52),
-               (186, 62), (150, 62)], fill=P["plum"])
-    # rubble at the base
-    d.polygon([(20, h - 16), (46, h - 30), (64, h - 16)], fill=P["plum"])
-    d.polygon([(56, h - 16), (78, h - 26), (96, h - 16)], fill=P["sand"])
-    d.polygon([(150, h - 16), (172, h - 28), (196, h - 16)], fill=P["plum"])
-    # rescue light
-    d.rectangle([4, h - 56, 10, h - 16], fill=P["ink"])
-    d.ellipse([0, h - 68, 16, h - 52], fill=P["red"])
-    d.ellipse([4, h - 64, 12, h - 56], fill=P["peach"])
-    return box
-
-
-def panel_house(d, box):
-    """Dome and steps in sand, 258 as a white numeral on red, seats as squares."""
-    w, h = box[2], box[3]
-    P = PALETTE
-    d.rectangle([0, 0, w, h], fill=P["sand"])
-    d.rectangle([0, 0, int(w * 0.55), h], fill=P["sky"])
-    # dome and steps
-    d.rectangle([14, 34, 96, 52], fill=P["paper"])
-    d.pieslice([26, 12, 84, 70], 180, 360, fill=P["paper"])
-    d.rectangle([28, 40, 82, 50], fill=P["sand"])
-    for i in range(3):
-        d.rectangle([10 + i * 2, 52 + i * 6, 100 - i * 2, 58 + i * 6], fill=P["paper"])
-    d.rectangle([44, 0, 66, 14], fill=P["paper"])
-    # red field with the numeral
-    d.rectangle([int(w * 0.55), 0, w, h], fill=P["red"])
-    face = font("sans-bold", 40)
-    label = "258"
-    lw = advance(d, label, face)
-    text_at(d, ((w + int(w * 0.55) - lw) / 2.0, 8), label, face, P["paper"])
-    # seat squares
-    for i in range(9):
-        x = int(w * 0.55) + 8 + (i % 9) * 9
-        y = h - 12
-        d.rectangle([x, y, x + 5, y + 5], fill=P["paper"])
-    for i in range(9):
-        x = int(w * 0.55) + 8 + (i % 9) * 9
-        d.rectangle([x, h - 22, x + 5, h - 17], fill=P["peach"])
-    return box
-
-
-def panel_cartel(d, box):
-    """Red crosshair over a sand map shape, handcuff motif, badge star."""
-    w, h = box[2], box[3]
-    P = PALETTE
-    d.rectangle([0, 0, w, h], fill=P["navy"])
-    d.polygon([(10, 30), (44, 12), (86, 20), (120, 10), (160, 24), (196, 16),
-               (214, 40), (198, 66), (150, 74), (104, 64), (60, 72), (24, 58)],
-              fill=P["sand"])
-    d.polygon([(10, 30), (44, 12), (86, 20), (120, 10), (160, 24), (196, 16),
-               (214, 40), (206, 46), (120, 34), (30, 42)], fill=P["ochre"])
-    # handcuffs
-    cx, cy = 74, 44
-    d.ellipse([cx - 24, cy - 14, cx + 2, cy + 12], outline=P["navy"], width=6)
-    d.ellipse([cx + 10, cy - 14, cx + 36, cy + 12], outline=P["navy"], width=6)
-    d.rectangle([cx + 2, cy - 4, cx + 10, cy + 2], fill=P["navy"])
-    # crosshair
-    tx, ty = 158, 40
-    d.ellipse([tx - 30, ty - 26, tx + 30, ty + 34], outline=P["red"], width=5)
-    d.line([(tx - 40, ty + 4), (tx + 40, ty + 4)], fill=P["red"], width=5)
-    d.line([(tx, ty - 36), (tx, ty + 44)], fill=P["red"], width=5)
-    d.ellipse([tx - 8, ty - 4, tx + 8, ty + 12], fill=P["red"])
-    # badge star
-    sx, sy, sr = 200, 64, 12
-    pts = []
-    for i in range(10):
-        import math
-        ang = -math.pi / 2 + i * math.pi / 5
-        rad = sr if i % 2 == 0 else sr * 0.45
-        pts.append((sx + rad * math.cos(ang), sy + rad * math.sin(ang)))
-    d.polygon(pts, fill=P["paper"])
-    d.ellipse([sx - 3, sy - 3, sx + 3, sy + 3], fill=P["navy"])
-    return box
-
-
-def panel_factory(d, box):
-    """A plum factory silhouette, orange flames at the roof, grey smoke curls."""
-    w, h = box[2], box[3]
-    P = PALETTE
-    d.rectangle([0, 0, w, h], fill=P["sand"])
-    d.rectangle([0, h - 14, w, h], fill=P["grey"])
-    # sawtooth roof and body
-    d.polygon([(24, 50), (24, h - 12), (188, h - 12), (188, 50), (166, 40),
-               (166, 50), (144, 40), (144, 50), (122, 40), (122, 50), (100, 40),
-               (100, 50), (78, 40), (78, 50), (56, 40), (56, 50), (34, 40)],
-              fill=P["plum"])
-    # chimney
-    d.rectangle([34, 18, 52, 46], fill=P["plum"])
-    # windows
-    for i in range(4):
-        x = 44 + i * 34
-        d.rectangle([x, h - 34, x + 20, h - 20], fill=P["ochre"])
-    # flames at the roof
-    d.polygon([(96, 46), (108, 20), (118, 34), (130, 8), (140, 30), (152, 16),
-               (158, 46)], fill=P["red"])
-    d.polygon([(108, 46), (118, 28), (128, 40), (136, 24), (144, 44)],
-              fill=P["ochre"])
-    # smoke curls
-    for i, (sx, sy, sr) in enumerate(((60, 12, 11), (78, 6, 9), (44, 4, 8))):
-        d.ellipse([sx - sr, sy - sr, sx + sr, sy + sr], fill=P["grey"])
-    d.ellipse([168, 14, 190, 34], fill=P["grey"])
-    d.ellipse([182, 4, 200, 22], fill=P["grey"])
-    return box
-
-
-def panel_lebanon(d, box):
-    """A row of small square houses, two collapsed, under a navy sky."""
-    w, h = box[2], box[3]
-    P = PALETTE
-    d.rectangle([0, 0, w, h], fill=P["navy"])
-    d.rectangle([0, h - 16, w, h], fill=P["grey"])
-    d.ellipse([w - 46, 8, w - 16, 34], fill=P["sand"])
-    houses = [(8, 26), (50, 20), (92, 30), (134, 22), (176, 26)]
-    for i, (x, top) in enumerate(houses):
-        d.rectangle([x, top, x + 36, h - 16], fill=P["sand"])
-        d.rectangle([x, top, x + 36, top + 6], fill=P["ochre"])
-        d.rectangle([x + 8, top + 14, x + 16, top + 24], fill=P["navy"])
-        d.rectangle([x + 22, top + 14, x + 30, top + 24], fill=P["navy"])
-    # two collapsed: jagged outlines instead of roofs
-    d.polygon([(50, h - 16), (50, 44), (58, 56), (64, 34), (72, 50), (78, 30),
-               (86, h - 16)], fill=P["plum"])
-    d.polygon([(134, h - 16), (134, 48), (142, 60), (150, 38), (160, 54),
-               (170, h - 16)], fill=P["plum"])
-    # rubble
-    d.polygon([(44, h - 16), (60, h - 26), (74, h - 16)], fill=P["sand"])
-    d.polygon([(126, h - 16), (144, h - 28), (162, h - 16)], fill=P["sand"])
-    # tear of smoke
-    d.ellipse([96, 6, 122, 24], fill=P["grey"])
-    return box
-
-
-def panel_vatican(d, box):
-    """A long table side-on, cream cloth, figures as rounded bars, ochre plates."""
-    w, h = box[2], box[3]
-    P = PALETTE
-    d.rectangle([0, 0, w, h], fill=P["sand"])
-    d.rectangle([0, 0, w, 14], fill=P["ochre"])
-    # figures behind the table
-    cols = (P["plum"], P["navy"], P["red"], P["teal"], P["plum"], P["navy"])
-    for i in range(7):
-        x = 14 + i * 29
-        col = cols[i % len(cols)]
-        d.rounded_rectangle([x, 16, x + 16, 50], radius=6, fill=col)
-        d.ellipse([x + 3, 6, x + 13, 18], fill=P["peach"])
-    # table
-    d.rectangle([6, 48, w - 6, 62], fill=P["paper"])
-    d.rectangle([6, 62, w - 6, 70], fill=P["grey"])
-    # plates
-    for i in range(8):
-        x = 16 + i * 25
-        d.ellipse([x, 44, x + 16, 52], fill=P["ochre"])
-    return box
-
-
-def panel_india(d, box):
-    """A raised fist inside a red ring over three grey phone screens."""
-    w, h = box[2], box[3]
-    P = PALETTE
-    d.rectangle([0, 0, w, h], fill=P["sky"])
-    # phone screens
-    for i, x in enumerate((20, 88, 156)):
-        d.rounded_rectangle([x, 40, x + 50, h - 6], radius=5, fill=P["grey"])
-        d.rounded_rectangle([x + 5, 46, x + 45, h - 14], radius=3, fill=P["sand"])
-        d.rectangle([x + 5, 46, x + 45, 54], fill=P["plum"])
-    # red ring
-    cx, cy = w / 2.0, 34
-    d.ellipse([cx - 28, cy - 28, cx + 28, cy + 28], outline=P["red"], width=6)
-    # fist
-    d.rounded_rectangle([cx - 12, cy - 4, cx + 12, cy + 22], radius=4, fill=P["ink"])
-    d.rounded_rectangle([cx - 15, cy - 16, cx + 15, cy + 2], radius=5, fill=P["ink"])
-    d.rectangle([cx + 12, cy - 8, cx + 18, cy + 4], fill=P["ink"])
-    d.rectangle([cx - 6, cy - 22, cx + 8, cy - 12], fill=P["ink"])
-    return box
-
-
-PANELS = {
-    "lead": panel_lead,
-    "libya": panel_libya,
-    "dymer": panel_dymer,
-    "house": panel_house,
-    "cartel": panel_cartel,
-    "factory": panel_factory,
-    "lebanon": panel_lebanon,
-    "vatican": panel_vatican,
-    "india": panel_india,
-}
-
-PANEL_BG = {
-    "lead": "sky",
-    "libya": "sky",
-    "dymer": "sky",
-    "house": "sand",
-    "cartel": "navy",
-    "factory": "sand",
-    "lebanon": "navy",
-    "vatican": "sand",
-    "india": "sky",
-}
-
-
-def paste_panel(page, name, x, y, width, height):
-    """Draw a panel into its own layer and paste it, so it cannot leak out."""
-    img, d = panel_layer(width, height, PALETTE[PANEL_BG[name]])
-    PANELS[name](d, (0, 0, int(width), int(height)))
-    page.paste(img, (int(x), int(y)))
-
-
-# --------------------------------------------------------------------------
-# the page
-# --------------------------------------------------------------------------
-
-
-def compose():
+# ---------------------------------------------------------------------------
+# Main composition
+# ---------------------------------------------------------------------------
+def compose() -> Image.Image:
     G = GRID
     P = PALETTE
+    T = TYPO
     E = EDITORIAL
-    page = Image.new("RGB", (G["page"], G["page"]), P["paper"])
-    d = ImageDraw.Draw(page)
 
-    # top kicker, centred, red, letter-spaced
-    text_centred(d, G["page"] / 2.0, G["kicker_y"], E["top_kicker"],
-                 font("sans-bold", G["kicker_size"]), P["red"], G["kicker_track"])
+    page = Image.new("RGB", (G["page"], G["page"]), P["bg"])
+    draw = ImageDraw.Draw(page)
 
-    # nameplate
-    plate_face = font("serif-bold", G["plate_size"])
-    plate_w = advance(d, E["nameplate"], plate_face)
-    assert plate_w <= G["page"] - 2 * G["margin"], "nameplate too wide"
-    text_centred(d, G["page"] / 2.0, G["plate_y"], E["nameplate"], plate_face, P["ink"])
+    content_left = G["margin"]
+    content_right = G["page"] - G["margin"]
+    content_width = content_right - content_left
 
-    # double rule
-    rule(d, G["margin"], G["bar_y"], G["page"] - G["margin"], G["bar_h"], P["ink"])
-    rule(d, G["margin"], G["hair_y"], G["page"] - G["margin"], 1, P["hairline"])
+    # ============================================================
+    # MASTHEAD BAND (y=48-96)
+    # ============================================================
+    masthead_font = get_font("bold", T["masthead"]["size"])
+    draw_text(draw, G["page"] / 2, G["masthead_y"] + 8, E["masthead"],
+              masthead_font, P["text_primary"], T["masthead"]["tracking"], anchor="ma")
 
-    # folio line
-    folio_face = font("sans-bold", G["folio_size"])
-    text_at(d, (G["margin"], G["folio_y"]), E["folio_left"], folio_face, P["grey"], 1.5)
-    text_right(d, G["page"] - G["margin"], G["folio_y"], E["folio_right"],
-               folio_face, P["grey"], 1.5)
+    date_font = get_font("regular", T["date_edition"]["size"])
+    draw_text(draw, G["page"] / 2, G["masthead_y"] + 36, E["date_edition"],
+              date_font, P["text_secondary"], anchor="ma")
 
-    # ---- lead
-    lead = E["lead"]
-    lx, lw = G["lead_x"], G["lead_w"]
-    text_at(d, (lx, G["lead_kick_y"]), lead["kicker"],
-            font("sans-bold", G["lead_kick_size"]), P["red"], G["lead_kick_track"])
-    head_face = font("serif-bold", G["lead_head_size"])
-    for i, line in enumerate(lead["headline"]):
-        assert advance(d, line, head_face) <= lw, "lead headline overflows: %r" % line
-        text_at(d, (lx, G["lead_head_y"] + i * G["lead_head_lead"]), line,
-                head_face, P["ink"])
-    WIDTH_LOG.append(("lead-headline",
-                      max(advance(d, l, head_face) for l in lead["headline"]), lw))
-    paste_panel(page, lead["panel"], lx, G["lead_panel_y"], lw, G["lead_panel_h"])
-    frame(d, (lx, G["lead_panel_y"], lx + lw, G["lead_panel_y"] + G["lead_panel_h"]),
-          P["hairline"])
-    deck_face = font("sans", G["lead_deck_size"])
-    deck_lines = wrap(d, lead["deck"], deck_face, lw)
-    assert len(deck_lines) <= 5, "lead deck needs %d lines" % len(deck_lines)
-    para(d, lx, G["lead_deck_y"], deck_lines, deck_face, G["lead_deck_lead"],
-         P["ink"], lw, "lead-deck")
+    # Thin rule under masthead
+    draw_rule(draw, content_left, G["masthead_y"] + G["masthead_h"],
+              content_right, 1, P["rule"])
 
-    # ---- numbers spine
-    sx, sw, sy, sh = G["spine_x"], G["spine_w"], G["spine_y"], G["spine_h"]
-    d.rectangle([sx, sy, sx + sw - 1, sy + sh - 1], fill=P["ink"])
-    d.rectangle([sx, sy, sx + 1, sy + sh - 1], fill=P["red"])
-    text_at(d, (sx + G["spine_pad"], G["spine_head_y"]), E["numbers_header"],
-            font("sans-bold", 11), P["paper"], 2)
-    fig_face = font("sans-bold", G["spine_fig_size"])
-    lab_face = font("sans", G["spine_label_size"])
-    lab_w = sw - 2 * G["spine_pad"]
-    # rows are as tall as their figure's ink plus their label; measure first so
-    # the separators sit exactly where the stack puts them
-    rows = []
-    top = G["spine_row_y"]
-    for fig, label in E["numbers"]:
-        gap = max(G["spine_label_gap"], int(fig_face.getbbox(fig)[3]) + 4)
-        labs = wrap(d, label, lab_face, lab_w)
-        assert len(labs) <= 2, "number label needs %d lines" % len(labs)
-        height = max(G["spine_row_h"], gap + len(labs) * G["spine_label_lead"] + 6)
-        rows.append((fig, labs, top, gap, height))
-        top += height
-    assert top <= sy + sh + 2, "numbers spine overruns: %d" % top
-    for i, (fig, labs, row_top, gap, height) in enumerate(rows):
-        if i:
-            rule(d, sx + 4, row_top - 8, sx + sw - 4, 1, "#3A342C")
-        text_at(d, (sx + G["spine_pad"], row_top), fig, fig_face, P["paper"])
-        para(d, sx + G["spine_pad"], row_top + gap, labs, lab_face,
-             G["spine_label_lead"], "#CFC8BA", lab_w, "spine-label-%d" % i)
-    assert rows[-1][2] + rows[-1][4] <= sy + sh
+    # ============================================================
+    # LEAD ZONE (y=112-380, full width)
+    # ============================================================
+    lead_left = content_left
+    lead_right = content_right
+    lead_width = lead_right - lead_left
 
-    # ---- cards
-    kick_face = font("sans-bold", G["card_kick_size"])
-    head_face = font("serif-bold", G["card_head_size"])
-    deck_face = font("sans", G["card_deck_size"])
-    for i, card in enumerate(E["cards"]):
-        col = i % 4
-        row = i // 4
-        x = G["card_x"][col]
-        y = G["card_row_y"][row]
-        cw = G["card_w"]
-        paste_panel(page, card["panel"], x, y, cw, G["card_art_h"])
-        frame(d, (x, y, x + cw, y + G["card_art_h"]), P["hairline"])
-        text_at(d, (x, y + G["card_kick_dy"]), card["kicker"],
-                kick_face, P["red"], G["card_kick_track"])
-        assert advance(d, card["kicker"], kick_face, G["card_kick_track"]) <= cw, \
-            "card kicker overflows: %r" % card["kicker"]
-        heads = wrap(d, card["headline"], head_face, cw)
-        assert len(heads) <= 2, "card headline needs %d lines: %r" % (len(heads), card["headline"])
-        para(d, x, y + G["card_head_dy"], heads, head_face, G["card_head_lead"],
-             P["ink"], cw, "card-head-%d" % (i + 1))
-        decks = wrap(d, card["deck"], deck_face, cw)
-        assert len(decks) <= 4, "card deck needs %d lines: %r" % (len(decks), card["deck"])
-        para(d, x, y + G["card_deck_dy"], decks, deck_face, G["card_deck_lead"],
-             P["grey"], cw, "card-deck-%d" % (i + 1))
+    # Lead kicker
+    kicker_font = get_font("bold", 14)
+    draw_text(draw, lead_left, G["lead_y"], E["lead"]["kicker"],
+              kicker_font, P["accent_red"], 2.0)
 
-    # ---- also today
-    rule(d, G["margin"], G["also_rule_y"], G["page"] - G["margin"], 1, P["hairline"])
-    text_at(d, (G["margin"], G["also_head_y"]), E["also_header"],
-            font("sans-bold", 12), P["red"], 2)
-    ak_face = font("sans-bold", 10)
-    ah_face = font("serif-bold", G["also_size"])
-    for i, (kick, head) in enumerate(E["also"]):
-        x = G["also_x"][i]
-        aw = G["also_w"]
-        text_at(d, (x, G["also_kick_y"]), kick, ak_face, P["red"], 1.5)
-        assert advance(d, kick, ak_face, 1.5) <= aw, "also kicker overflows"
-        lines = wrap(d, head, ah_face, aw)
-        assert len(lines) <= 2, "also headline needs %d lines" % len(lines)
-        para(d, x, G["also_head_y2"], lines, ah_face, G["also_lead"], P["ink"],
-             aw, "also-head-%d" % (i + 1))
+    # Lead headline (two lines, accent red, large)
+    headline_font = get_font("bold", T["lead_headline"]["size"])
+    headline_leading = T["lead_headline"]["size"] * T["lead_headline"]["leading"]
+    for i, line in enumerate(E["lead"]["headline"]):
+        draw_text(draw, lead_left, G["lead_y"] + 30 + i * headline_leading,
+                  line, headline_font, P["accent_red"])
 
-    # ---- footer
-    text_centred(d, G["page"] / 2.0, G["footer_y"], E["footer"],
-                 font("sans", G["footer_size"]), P["grey"])
+    # Lead illustration (right side of lead zone, approx 40% width)
+    illus_width = lead_width * 0.38
+    illus_x = lead_right - illus_width
+    illus_y = G["lead_y"] + 30
+    illus_h = G["lead_h"] - 40
+    draw_lead_illustration(draw, illus_x, illus_y, illus_width, illus_h)
+
+    # Lead dek (left side, wraps in remaining width)
+    dek_font = get_font("regular", T["lead_dek"]["size"])
+    dek_leading = T["lead_dek"]["size"] * T["lead_dek"]["leading"]
+    dek_width = illus_x - lead_left - 24  # gap before illustration
+    dek_lines = wrap_text(draw, E["lead"]["dek"], dek_font, dek_width)
+    dek_y = G["lead_y"] + 30 + len(E["lead"]["headline"]) * headline_leading + 16
+    draw_wrapped(draw, lead_left, dek_y, dek_lines, dek_font, dek_leading, P["text_primary"])
+
+    # Thick rule under lead
+    draw_rule(draw, content_left, G["lead_y"] + G["lead_h"],
+              content_right, 2, P["rule"])
+
+    # ============================================================
+    # NUMBERS TICKER (y=396-452, full width, ruled top/bottom)
+    # ============================================================
+    ticker_top = G["numbers_y"]
+    ticker_bottom = G["numbers_y"] + G["numbers_h"]
+
+    # Top rule
+    draw_rule(draw, content_left, ticker_top, content_right, 2, P["rule"])
+
+    # Header
+    num_header_font = get_font("bold", 12)
+    draw_text(draw, content_left, ticker_top + 6, E["numbers_header"],
+              num_header_font, P["accent_red"], 2.0)
+
+    # Number items - horizontal layout
+    num_value_font = get_font("bold", T["numbers_value"]["size"])
+    num_label_font = get_font("bold", T["numbers_label"]["size"])
+
+    num_count = len(E["numbers"])
+    num_spacing = (content_width - 40) / num_count  # 20px padding each side
+    start_x = content_left + 20
+
+    for i, (value, label) in enumerate(E["numbers"]):
+        cx = start_x + i * num_spacing + num_spacing / 2
+        # Value (large, red, centered)
+        draw_text(draw, cx, ticker_top + 18, value,
+                  num_value_font, P["accent_red"], anchor="ma")
+        # Label (small, uppercase, tracking, centered below)
+        label_upper = label.upper() if T["numbers_label"]["uppercase"] else label
+        draw_text(draw, cx, ticker_top + 18 + T["numbers_value"]["size"] + 2, label_upper,
+                  num_label_font, P["text_secondary"], T["numbers_label"]["tracking"], anchor="ma")
+
+    # Bottom rule
+    draw_rule(draw, content_left, ticker_bottom, content_right, 2, P["rule"])
+
+    # ============================================================
+    # GRID (y=468-976, 4 cols x 2 rows, gutter 16px)
+    # ============================================================
+    grid_top = G["grid_y"]
+    grid_left = content_left
+    grid_right = content_right
+    grid_width = grid_right - grid_left
+    col_width = (grid_width - (G["grid_cols"] - 1) * G["grid_gutter"]) / G["grid_cols"]
+    row_height = (G["grid_h"] - G["grid_gutter"]) / G["grid_rows"]
+
+    kicker_font = get_font("bold", T["grid_kicker"]["size"])
+    headline_font = get_font("bold", T["grid_headline"]["size"])
+    body_font = get_font("regular", T["grid_body"]["size"])
+    headline_leading = T["grid_headline"]["size"] * T["grid_headline"]["leading"]
+    body_leading = T["grid_body"]["size"] * T["grid_body"]["leading"]
+
+    for idx, card in enumerate(E["grid"]):
+        col = idx % G["grid_cols"]
+        row = idx // G["grid_cols"]
+
+        x = grid_left + col * (col_width + G["grid_gutter"])
+        y = grid_top + row * (row_height + G["grid_gutter"])
+
+        card_width = col_width
+        card_height = row_height
+
+        # Subtle tint background for the whole card
+        tint_color = P.get(card["tint"], P["bg"])
+        draw.rectangle([x, y, x + card_width, y + card_height], fill=tint_color)
+
+        # Illustration at top (fixed height ~80px)
+        illus_h = 80
+        draw_grid_illustration(draw, x, y, card_width, illus_h, card["region"])
+
+        # Kicker (region label, red, uppercase, tracking)
+        kicker_y = y + illus_h + 8
+        draw_text(draw, x + 8, kicker_y, card["kicker"],
+                  kicker_font, P["accent_red"], T["grid_kicker"]["tracking"])
+
+        # Thin accent line under kicker
+        kicker_w = measure_text(draw, card["kicker"], kicker_font, T["grid_kicker"]["tracking"])
+        draw_rule(draw, x + 8, kicker_y + T["grid_kicker"]["size"] + 3,
+                  x + 8 + kicker_w, 1.5, P["accent_red"])
+
+        # Headline (wraps to 2 lines max)
+        headline_y = kicker_y + T["grid_kicker"]["size"] + 12
+        headline_lines = wrap_text(draw, card["headline"], headline_font, card_width - 16)
+        headline_lines = headline_lines[:2]  # clamp to 2 lines
+        draw_wrapped(draw, x + 8, headline_y, headline_lines, headline_font,
+                     headline_leading, P["text_primary"])
+
+        # Body (wraps to 3-4 lines)
+        body_y = headline_y + len(headline_lines) * headline_leading + 4
+        body_lines = wrap_text(draw, card["body"], body_font, card_width - 16)
+        body_lines = body_lines[:4]  # clamp to 4 lines
+        draw_wrapped(draw, x + 8, body_y, body_lines, body_font,
+                     body_leading, P["text_secondary"])
+
+        # Thin rule between cards (vertical)
+        if col < G["grid_cols"] - 1:
+            rule_x = x + card_width + G["grid_gutter"] / 2
+            draw_rule(draw, rule_x, y + 4, rule_x + 1, card_height - 8, P["rule"])
+
+    # Horizontal rule between rows
+    mid_y = grid_top + row_height + G["grid_gutter"] / 2
+    draw_rule(draw, grid_left, mid_y, grid_right, 1, P["rule"])
+
+    # ============================================================
+    # FOOTER (y=992-1024)
+    # ============================================================
+    footer_font = get_font("regular", T["footer"]["size"])
+    draw_text(draw, G["page"] / 2, G["footer_y"] + 10, E["footer"],
+              footer_font, P["text_secondary"], anchor="ma")
 
     return page
 
 
-def main(argv):
+def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print("usage: render.py OUT.png")
         return 2
-    out = argv[1]
+
+    out_path = argv[1]
     page = compose()
-    assert page.size == (GRID["page"], GRID["page"])
-    page.save(out, format="PNG", optimize=True)
-    size = os.path.getsize(out)
-    print("wrote %s  %dx%d  %d bytes" % (out, page.size[0], page.size[1], size))
-    worst = sorted(WIDTH_LOG, key=lambda r: r[1] - r[2], reverse=True)[:4]
-    for name, widest, width in worst:
-        print("  column %-14s widest line %6.1f px of %6.1f px" % (name, widest, width))
+    assert page.size == (GRID["page"], GRID["page"]), f"Wrong size: {page.size}"
+    page.save(out_path, format="PNG", optimize=True)
+    size = os.path.getsize(out_path)
+    print(f"wrote {out_path}  {page.size[0]}x{page.size[1]}  {size} bytes")
     return 0
 
 
