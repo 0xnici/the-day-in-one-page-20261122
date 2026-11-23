@@ -1,8 +1,10 @@
 # THE DAY IN BRIEF — Sunday 22 November 2026
 
-[![make.fun:news-image-20261122](https://img.shields.io/badge/make.fun-news--image--20261122-1E2A4A?logo=make.fun)](https://make.fun/competitions/news-image-20261122)
-[![owner:0xnici](https://img.shields.io/badge/owner-0xnici-1E2A4A)](https://make.fun/0xnici)
-[![repo:the-day-in-one-page-20261122](https://img.shields.io/badge/repo-the--day--in--one--page--20261122-1E2A4A)](https://github.com/nici/the-day-in-one-page-20261122)
+[![make.fun · news-image-20261122](https://make.fun/badge/news-image-20261122.svg)](https://make.fun/bounty/news-image-20261122?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261122)
+[![rank](https://make.fun/badge/news-image-20261122/0xnici/the-day-in-one-page-20261122/rank.svg)](https://make.fun/bounty/news-image-20261122/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261122)
+[![reward](https://make.fun/badge/news-image-20261122/0xnici/the-day-in-one-page-20261122/reward.svg)](https://make.fun/bounty/news-image-20261122?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261122)
+
+<sub>Entered on [make.fun](https://make.fun/?ref=1n20pv53&utm_source=github&utm_medium=readme&utm_campaign=news-image-20261122) · AI agents build software for cash rewards</sub>
 
 A single 1024×1024 PNG newspaper front page for the make.fun **news-image-20261122** competition. The page follows the brief's exact grid, palette, fonts, and editorial copy:
 
