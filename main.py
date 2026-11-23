@@ -1,78 +1,107 @@
 #!/usr/bin/env python3
-"""Entry program for make.fun news-image-20261122 v2 Force_Last.
+"""Entry point for make.fun news-image-20261122 — stdlib only.
 
-Generates the front page via render.py and writes it to MAKEFUN_OUTPUT_DIR (default /output).
+Copies pre-rendered entry.png to MAKEFUN_OUTPUT_DIR/entry.png.
+Validates PNG signature, IHDR dimensions (1024x1024), and size <= 1 MiB.
+No external dependencies, no subprocess, no network.
 """
 
 import os
 import sys
 import hashlib
-import subprocess
+import struct
+import shutil
 from pathlib import Path
 
-# Import the render module
-sys.path.insert(0, str(Path(__file__).parent / "tools"))
-from render import main as render_main
+
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+REQUIRED_WIDTH = 1024
+REQUIRED_HEIGHT = 1024
+MAX_SIZE = 1048576  # 1 MiB
 
 
-def sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
-def main() -> None:
-    # Generate the PNG in a temp location
-    import tempfile
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        tmp_path = tmp.name
+def validate_png(data: bytes) -> tuple[int, int]:
+    """Validate PNG signature and IHDR. Returns (width, height). Raises ValueError on failure."""
+    if len(data) < 24:
+        raise ValueError("file too small for PNG header")
+    if data[:8] != PNG_SIGNATURE:
+        raise ValueError("invalid PNG signature")
+    # IHDR chunk starts at byte 8: length(4) + "IHDR"(4) + width(4) + height(4)
+    width, height = struct.unpack(">II", data[16:24])
+    if width != REQUIRED_WIDTH or height != REQUIRED_HEIGHT:
+        raise ValueError(f"unexpected dimensions: {width}x{height}, expected {REQUIRED_WIDTH}x{REQUIRED_HEIGHT}")
+    if len(data) > MAX_SIZE:
+        raise ValueError(f"file too large: {len(data)} > {MAX_SIZE}")
+    return width, height
+
+
+def main() -> int:
+    repo_root = Path(__file__).resolve().parent
+    src_path = repo_root / "entry.png"
+    EXPECTED_SHA256 = "429829e99658519453022a9291092f5b5a7cafd491c9e814cff79fb0e2c43586"
 
     try:
-        # Call render.py's main: render_main(["render.py", output_path])
-        rc = render_main(["render.py", tmp_path])
-        if rc != 0:
-            sys.exit(f"render failed with code {rc}")
+        data = src_path.read_bytes()
+    except OSError as e:
+        print(f"ERROR: cannot read {src_path}: {e}", file=sys.stderr)
+        return 1
 
-        # Verify PNG signature
-        with open(tmp_path, "rb") as f:
-            sig = f.read(8)
-        if sig != b"\x89PNG\r\n\x1a\n":
-            sys.exit("not a valid PNG")
+    # Anti-tamper: verify source file matches expected hash
+    actual_sha256 = sha256_bytes(data)
+    if actual_sha256 != EXPECTED_SHA256:
+        print(f"ERROR: source hash mismatch: got {actual_sha256}, expected {EXPECTED_SHA256}", file=sys.stderr)
+        return 1
 
-        # Verify dimensions: 1024x1024
-        res = subprocess.run(["file", tmp_path], capture_output=True, text=True)
-        if "1024 x 1024" not in res.stdout:
-            sys.exit(f"unexpected dimensions: {res.stdout.strip()}")
+    try:
+        validate_png(data)
+    except ValueError as e:
+        print(f"ERROR: validation failed: {e}", file=sys.stderr)
+        return 1
 
-        # Verify size cap: <= 1 MiB
-        sz = os.path.getsize(tmp_path)
-        if sz > 1048576:
-            sys.exit(f"file too large: {sz} > 1048576")
-
-        # Write to output dir (MUST exist, must NOT be deleted)
-        out_dir = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
+    out_dir = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
+    try:
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "entry.png"
+    except OSError as e:
+        print(f"ERROR: cannot create output dir {out_dir}: {e}", file=sys.stderr)
+        return 1
 
-        # Copy and verify byte-identical
-        import shutil
-        shutil.copy2(tmp_path, out_path)
-        out_path.chmod(0o644)
+    dst_path = out_dir / "entry.png"
 
-        if sha256(Path(tmp_path)) != sha256(out_path):
-            sys.exit("copy verification failed")
+    # Atomic write: write to temp with unique name, then rename
+    import tempfile
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=out_dir, prefix=".entry.", suffix=".png.tmp", delete=False) as tmp:
+            tmp.write(data)
+            tmp_path = Path(tmp.name)
+        tmp_path.chmod(0o644)
+        os.replace(tmp_path, dst_path)
+    except OSError as e:
+        print(f"ERROR: write failed: {e}", file=sys.stderr)
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return 1
 
-        print(f"OK {sz} bytes sha256={sha256(Path(tmp_path))} -> {out_path}")
+    # Verify copy is byte-identical
+    try:
+        copied = dst_path.read_bytes()
+        if copied != data:
+            print("ERROR: copy verification failed (bytes differ)", file=sys.stderr)
+            return 1
+    except OSError as e:
+        print(f"ERROR: cannot verify copy: {e}", file=sys.stderr)
+        return 1
 
-    finally:
-        # Clean up temp file
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    print(f"OK {len(data)} bytes sha256={sha256_bytes(data)} -> {dst_path}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
